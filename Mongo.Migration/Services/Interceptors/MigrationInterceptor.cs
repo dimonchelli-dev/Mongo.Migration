@@ -1,44 +1,103 @@
-﻿using Mongo.Migration.Documents;
+﻿using System;
+using Mongo.Migration.Documents;
 using Mongo.Migration.Migrations.Document;
 
 using MongoDB.Bson.IO;
 using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Bson.Serialization.Serializers;
 
 namespace Mongo.Migration.Services.Interceptors
 {
-    internal class MigrationInterceptor<TDocument> : BsonClassMapSerializer<TDocument>
+    internal class MigrationInterceptor<TDocument>(
+        BsonClassMapSerializer<TDocument> serializer,
+        IDocumentMigrationRunner migrationRunner,
+        IDocumentVersionService documentVersionService)
+        : IBsonIdProvider,
+          IBsonDocumentSerializer,
+          IBsonPolymorphicSerializer,
+          IHasDiscriminatorConvention,
+          IBsonSerializer<TDocument>
         where TDocument : class, IDocument
     {
-        private readonly IDocumentVersionService _documentVersionService;
-
-        private readonly IDocumentMigrationRunner _migrationRunner;
-
-        public MigrationInterceptor(IDocumentMigrationRunner migrationRunner, IDocumentVersionService documentVersionService)
-            : base(BsonClassMap.LookupClassMap(typeof(TDocument)))
+        TDocument IBsonSerializer<TDocument>.Deserialize(
+            BsonDeserializationContext context,
+            BsonDeserializationArgs args)
         {
-            this._migrationRunner = migrationRunner;
-            this._documentVersionService = documentVersionService;
+            return DeserializeInternal(context, args);
         }
 
-        public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, TDocument value)
+        void IBsonSerializer<TDocument>.Serialize(
+            BsonSerializationContext context,
+            BsonSerializationArgs args,
+            TDocument value)
         {
-            this._documentVersionService.DetermineVersion(value);
-
-            base.Serialize(context, args, value);
+            SerializeInternal(context, args, value);
         }
 
-        public override TDocument Deserialize(BsonDeserializationContext context, BsonDeserializationArgs args)
+        private TDocument DeserializeInternal(
+            BsonDeserializationContext context,
+            BsonDeserializationArgs args)
         {
-            // TODO: Performance? LatestVersion, dont do anything
             var document = BsonDocumentSerializer.Instance.Deserialize(context);
-
-            this._migrationRunner.Run(typeof(TDocument), document);
-
+            migrationRunner.Run(typeof(TDocument), document);
             var migratedContext =
                 BsonDeserializationContext.CreateRoot(new BsonDocumentReader(document));
-
-            return base.Deserialize(migratedContext, args);
+            return serializer.Deserialize(migratedContext, args);
         }
+
+        private void SerializeInternal(
+            BsonSerializationContext context,
+            BsonSerializationArgs args,
+            TDocument value)
+        {
+            documentVersionService.DetermineVersion(value);
+            serializer.Serialize(context, args, value);
+        }
+
+        public void Serialize(
+            BsonSerializationContext context,
+            BsonSerializationArgs args,
+            object value)
+        {
+            var typedValue = (TDocument)value;
+            SerializeInternal(context, args, typedValue);
+        }
+
+        public object Deserialize(
+            BsonDeserializationContext context,
+            BsonDeserializationArgs args)
+        {
+            return DeserializeInternal(context, args);
+        }
+
+        public bool GetDocumentId(
+            object document,
+            out object id,
+            out Type idNominalType,
+            out IIdGenerator idGenerator)
+        {
+            return serializer.GetDocumentId(document, out id, out idNominalType, out idGenerator);
+        }
+
+        public void SetDocumentId(
+            object document,
+            object id)
+        {
+            serializer.SetDocumentId(document, id);
+        }
+
+        public bool TryGetMemberSerializationInfo(
+            string memberName,
+            out BsonSerializationInfo serializationInfo)
+        {
+            return serializer.TryGetMemberSerializationInfo(memberName, out serializationInfo);
+        }
+
+        public bool IsDiscriminatorCompatibleWithObjectSerializer  => serializer.IsDiscriminatorCompatibleWithObjectSerializer;
+
+        public IDiscriminatorConvention DiscriminatorConvention  => serializer.DiscriminatorConvention;
+
+        public Type ValueType => serializer.ValueType;
     }
 }
