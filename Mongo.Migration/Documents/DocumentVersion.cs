@@ -21,13 +21,7 @@ namespace Mongo.Migration.Documents
 
         static DocumentVersion()
         {
-            try
-            {
-                BsonSerializer.RegisterSerializer(typeof(DocumentVersion), new DocumentVersionSerializer());
-            }
-            catch (Exception)
-            {
-            }
+            BsonSerializer.TryRegisterSerializer(new DocumentVersionSerializer());
         }
 
         public DocumentVersion(string version)
